@@ -47,6 +47,13 @@ jobs:
             https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz --output "$archive"
           printf '%s  %s\n' "$TRIVY_SHA256" "$archive" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
-          : > "$RUNNER_TEMP/no-iac-exceptions"
-          "$RUNNER_TEMP/trivy" config --config /dev/null --ignorefile "$RUNNER_TEMP/no-iac-exceptions" \
+          # A reviewed, expiring control exception: SSE-S3 is permitted for the existing lab state bucket.
+          cat > "$RUNNER_TEMP/reviewed-iac-exceptions.yaml" <<'POLICY'
+          misconfigurations:
+            - id: AVD-AWS-0132
+              paths: [bootstrap/main.tf]
+              statement: "SSE-S3 encrypts this lab state bucket; customer-managed KMS is not a project requirement. Re-review before production state activation."
+              expired_at: 2027-01-20
+          POLICY
+          "$RUNNER_TEMP/trivy" config --config /dev/null --ignorefile "$RUNNER_TEMP/reviewed-iac-exceptions.yaml" \
             --severity HIGH,CRITICAL --exit-code 1 "$TF_ROOT"

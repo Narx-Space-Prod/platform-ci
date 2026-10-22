@@ -247,4 +247,4 @@ jobs:
           cosign sign --yes "$IMAGE_REFERENCE"
           cosign attest --yes --type https://narx.space/attestations/release/v1 --predicate release/provenance.json "$IMAGE_REFERENCE"
           cosign attest --yes --type cyclonedx --predicate release/sbom.cdx.json "$IMAGE_REFERENCE"
-          printf '### %s release\n\n`%s`\n\nSource: `%s`\n' "$COMPONENT" "$IMAGE_REFERENCE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf '### %s release\n\n%s\n\nSource: %s\n' "$COMPONENT" "$IMAGE_REFERENCE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
