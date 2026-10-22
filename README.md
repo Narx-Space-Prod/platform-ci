@@ -12,7 +12,8 @@ Shared validators are merged. The application migration adds `service.yml` for a
 cached Docker runtime build that includes service tests and checks the non-root image user.
 ECR publishing, image signing/security scanning and release orchestration remain separate work.
 All changes after repository initialization go through feature branches and pull requests.
-These private repositories use GitHub Free; review enforcement requires the planned Team upgrade.
+These repositories are public on GitHub Free. Protected `main` requires a CODEOWNER
+approval, passing CI checks and resolved conversations; administrators follow the same rules.
 
 ## Reusable workflows
 
