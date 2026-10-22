@@ -48,12 +48,16 @@ jobs:
           printf '%s  %s\n' "$TRIVY_SHA256" "$archive" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
           # A reviewed, expiring control exception: SSE-S3 is permitted for the existing lab state bucket.
+          if [ "$TF_ROOT" = bootstrap ]; then
           cat > "$RUNNER_TEMP/reviewed-iac-exceptions.yaml" <<'POLICY'
           misconfigurations:
             - id: AVD-AWS-0132
-              paths: [bootstrap/main.tf]
+              paths: [main.tf]
               statement: "SSE-S3 encrypts this lab state bucket; customer-managed KMS is not a project requirement. Re-review before production state activation."
               expired_at: 2027-01-20
           POLICY
+          else
+            printf 'misconfigurations: []\n' > "$RUNNER_TEMP/reviewed-iac-exceptions.yaml"
+          fi
           "$RUNNER_TEMP/trivy" config --config /dev/null --ignorefile "$RUNNER_TEMP/reviewed-iac-exceptions.yaml" \
             --severity HIGH,CRITICAL --exit-code 1 "$TF_ROOT"
