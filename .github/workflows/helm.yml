@@ -36,7 +36,7 @@ jobs:
           SCHEMA_REVISION: b2ba4defe30ed5a0104987433896f1fd32807304
         run: |
           mkdir -p "$RUNNER_TEMP/schemas"
-          for schema in deployment-apps-v1 service-v1 serviceaccount-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1; do
+          for schema in deployment-apps-v1 service-v1 serviceaccount-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1 configmap-v1 statefulset-apps-v1 persistentvolumeclaim-v1 networkpolicy-networking-v1 job-batch-v1; do
             curl --fail --silent --show-error --location --retry 2 --max-time 30 \
               "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$SCHEMA_REVISION/v1.35.0-standalone-strict/$schema.json" \
               --output "$RUNNER_TEMP/schemas/$schema.json"
@@ -60,4 +60,21 @@ jobs:
           if helm template catalogue charts/commerce-service >/dev/null 2>&1; then
             echo 'Chart incorrectly accepted a release without an image repository and digest.' >&2
             exit 1
+          fi
+      - name: Validate full commerce release chart when present
+        run: |
+          if [ -f scripts/delivery.py ]; then
+            python3 -m unittest discover -s tests -p 'test_delivery*.py' -v
+            python3 scripts/delivery.py validate
+            helm dependency build --skip-refresh charts/commerce
+            python3 scripts/delivery.py fixtures "$RUNNER_TEMP/release.json"
+            for environment in dev qa production; do
+              helm lint --strict charts/commerce -f "environments/$environment/runtime.yaml" -f "$RUNNER_TEMP/release.json" \
+                --set publicOrigin=https://validation.invalid --set awsRegion=us-east-1 --set 'externalDataCIDRs[0]=10.0.0.0/16'
+              helm template commerce charts/commerce -n "commerce-$environment" \
+                -f "environments/$environment/runtime.yaml" -f "$RUNNER_TEMP/release.json" \
+                --set publicOrigin=https://validation.invalid --set awsRegion=us-east-1 --set 'externalDataCIDRs[0]=10.0.0.0/16' > "$RUNNER_TEMP/commerce-$environment.yaml"
+              "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
+                -schema-location "$RUNNER_TEMP/schemas/{{.ResourceKind}}{{.KindSuffix}}.json" "$RUNNER_TEMP/commerce-$environment.yaml"
+            done
           fi
