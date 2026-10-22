@@ -31,6 +31,16 @@ jobs:
             --output "$archive"
           printf '%s  %s\n' "$KUBECONFORM_SHA256" "$archive" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" kubeconform
+      - name: Fetch the pinned Kubernetes schemas once
+        env:
+          SCHEMA_REVISION: b2ba4defe30ed5a0104987433896f1fd32807304
+        run: |
+          mkdir -p "$RUNNER_TEMP/schemas"
+          for schema in deployment-apps-v1 service-v1 serviceaccount-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1; do
+            curl --fail --silent --show-error --location --retry 2 --max-time 30 \
+              "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$SCHEMA_REVISION/v1.35.0-standalone-strict/$schema.json" \
+              --output "$RUNNER_TEMP/schemas/$schema.json"
+          done
       - name: Validate chart and render all environment profiles
         run: |
           # Dummy image exists only in rendered validation output, never in GitOps release state.
@@ -42,7 +52,8 @@ jobs:
               --set image.repository=registry.invalid/validation-only/catalogue --set "image.digest=$digest"
             helm template catalogue charts/commerce-service -n "commerce-$environment" -f "$values" \
               --set image.repository=registry.invalid/validation-only/catalogue --set "image.digest=$digest" > "$rendered"
-            "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.35.0 "$rendered"
+            "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
+              -schema-location "$RUNNER_TEMP/schemas/{{.ResourceKind}}{{.KindSuffix}}.json" "$rendered"
           done
       - name: Reject missing immutable image identity
         run: |
