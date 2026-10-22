@@ -1,0 +1,59 @@
+name: GitOps release notification
+
+on:
+  workflow_call:
+    inputs:
+      releases:
+        description: JSON array of published image identities
+        required: true
+        type: string
+    secrets:
+      release-app-private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Request GitOps release PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Record signed image identities for reconciliation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES: ${{ inputs.releases }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess
+          for release in json.loads(os.environ['RELEASES']):
+              if not release.get('digest'):
+                  continue
+              if release.get('component') not in {'frontend','catalogue','orders','cart'} or not re.fullmatch('sha256:[a-f0-9]{64}', release['digest']):
+                  raise SystemExit('Invalid release identity')
+              release.update(repository=os.environ['GITHUB_REPOSITORY'], commit=os.environ['GITHUB_SHA'], runId=int(os.environ['GITHUB_RUN_ID']))
+              tag = release['component'] + '-' + release['commit']
+              path = pathlib.Path('release.json'); path.write_text(json.dumps(release, sort_keys=True) + '\n')
+              exists = subprocess.run(['gh','release','view',tag,'--repo',os.environ['GITHUB_REPOSITORY']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+              if not exists:
+                  subprocess.run(['gh','release','create',tag,'--repo',os.environ['GITHUB_REPOSITORY'],
+                      '--target',release['commit'],'--title',tag,'--notes','Tested image; verify signed provenance before promotion.',str(path)],check=True)
+          PY
+      - name: Mint token scoped to GitOps
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.NARX_RELEASE_APP_ID }}
+          private-key: ${{ secrets.release-app-private-key }}
+          owner: Narx-Space-Prod
+          repositories: platform-gitops
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Request reconciliation of completed releases
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches -f event_type=release-published

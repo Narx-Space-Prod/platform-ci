@@ -1,16 +1,21 @@
-name: Application build and tests
+name: Application build and release
 
 on:
   workflow_call:
     inputs:
       component:
-        description: Service name used for the validation image and build cache
+        description: Allowlisted component (frontend, catalogue, orders or cart)
         required: true
         type: string
       context:
         description: Build context relative to the caller repository
         default: .
         type: string
+    outputs:
+      image:
+        value: ${{ jobs.publish.outputs.image }}
+      digest:
+        value: ${{ jobs.publish.outputs.digest }}
 
 permissions:
   contents: read
@@ -19,17 +24,59 @@ jobs:
   build:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
     env:
+      COMPONENT: ${{ inputs.component }}
+      BUILD_CONTEXT: ${{ inputs.context }}
       IMAGE_TAG: narx-check-${{ inputs.component }}:${{ github.sha }}
     steps:
       - name: Check out application source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Validate component and detect meaningful changes
+        id: changes
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          expected = {'frontend': ('Narx-Space-Prod/commerce-frontend', '.'),
+                      'catalogue': ('Narx-Space-Prod/commerce-catalogue', '.'),
+                      'orders': ('Narx-Space-Prod/commerce-orders', '.'),
+                      'cart': ('Narx-Space-Prod/commerce-orders', 'cart')}
+          if expected.get(os.environ['COMPONENT']) != (os.environ['GITHUB_REPOSITORY'], os.environ['BUILD_CONTEXT']):
+              raise SystemExit('Unexpected component, repository or build context')
+          with open(os.environ['GITHUB_EVENT_PATH']) as source:
+              event = json.load(source)
+          base = event.get('pull_request', {}).get('base', {}).get('sha') or event.get('before', '')
+          if not base or set(base) == {'0'}:
+              changed = True
+          else:
+              files = subprocess.check_output(['git', 'diff', '--name-only', '-z', base, os.environ['GITHUB_SHA']]).decode().split('\0')
+              def relevant(path):
+                  if not path:
+                      return False
+                  if path.startswith(('.github/workflows/', '.github/actions/')):
+                      return True
+                  if os.environ['COMPONENT'] == 'cart':
+                      return path.startswith('cart/') and not path.endswith('/README.md')
+                  if os.environ['COMPONENT'] == 'orders' and path.startswith('cart/'):
+                      return False
+                  return path not in {'README.md', 'LICENSE', '.github/CODEOWNERS', '.github/PULL_REQUEST_TEMPLATE.md'} and not path.startswith('docs/')
+              changed = any(map(relevant, files))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('changed=' + str(changed).lower() + '\n')
+          print('Build required:', changed)
+          PY
       - name: Set up BuildKit
+        if: steps.changes.outputs.changed == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build tested runtime image
+      - name: Build tested runtime image once
+        if: steps.changes.outputs.changed == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ inputs.context }}
@@ -37,11 +84,167 @@ jobs:
           load: true
           push: false
           tags: ${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=${{ inputs.component }}
           cache-to: type=gha,mode=max,scope=${{ inputs.component }}
-      - name: Verify runtime image defaults to a non-root user
+      - name: Verify non-root runtime
+        if: steps.changes.outputs.changed == 'true'
         run: |
           user=$(docker image inspect "$IMAGE_TAG" --format '{{.Config.User}}')
           case "$user" in
             ''|root|root:*|0|0:*) echo 'Runtime image must specify a non-root user.' >&2; exit 1 ;;
           esac
+      - name: Install verified vulnerability scanner
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          TRIVY_VERSION: 0.76.1
+          TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" --output "$archive"
+          printf '%s  %s\n' "$TRIVY_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Cache vulnerability databases
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-v0.76.1-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: trivy-v0.76.1-${{ runner.os }}-
+      - name: Scan tested image and generate SBOM
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          mkdir -p release
+          : > "$RUNNER_TEMP/no-vulnerability-exceptions"
+          trivy image --config /dev/null --scanners vuln --format json \
+            --ignorefile "$RUNNER_TEMP/no-vulnerability-exceptions" \
+            --output release/vulnerabilities.json "$IMAGE_TAG"
+          trivy convert --format cyclonedx --output release/sbom.cdx.json release/vulnerabilities.json
+          # Unfixed HIGH/CRITICAL findings also block publication.
+          trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 release/vulnerabilities.json
+      - name: Retain security evidence
+        if: always() && steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-${{ inputs.component }}
+          path: release/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Export exact tested image for trusted publisher
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && steps.changes.outputs.changed == 'true'
+        run: docker save "$IMAGE_TAG" --output "$RUNNER_TEMP/runtime.tar"
+      - name: Transfer image without rebuilding
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-${{ inputs.component }}
+          path: ${{ runner.temp }}/runtime.tar
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Report publication held until AWS activation
+        if: github.event_name == 'push' && vars.DELIVERY_ENABLED != 'true'
+        run: echo 'ECR publishing is disabled. Configure AWS OIDC/ECR and the release App before setting DELIVERY_ENABLED=true.' >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish signed image
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: registry-release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.identity.outputs.image }}
+      digest: ${{ steps.identity.outputs.digest }}
+    env:
+      COMPONENT: ${{ inputs.component }}
+      IMAGE_TAG: narx-check-${{ inputs.component }}:${{ github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    steps:
+      - name: Validate AWS configuration
+        env:
+          RELEASE_ROLE: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+        run: |
+          [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$AWS_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]
+          [[ "$RELEASE_ROLE" =~ ^arn:aws:iam::[0-9]{12}:role/ ]]
+      - name: Download tested runtime image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-${{ inputs.component }}
+          path: runtime
+      - name: Download matching security evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: security-${{ inputs.component }}
+          path: release
+      - name: Load exact tested image
+        run: docker load --input runtime/runtime.tar
+      - name: Assume short-lived AWS role through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: release-${{ github.run_id }}
+          role-duration-seconds: 900
+      - name: Authenticate to private ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - name: Publish immutable commit image
+        id: identity
+        run: |
+          name="narx/commerce-$COMPONENT"
+          image="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$name"
+          tag="$image:$GITHUB_SHA"
+          aws ecr batch-get-image --repository-name "$name" --image-ids "imageTag=$GITHUB_SHA" > existing.json
+          local_id=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
+          export local_id
+          existing=$(python3 - <<'PY'
+          import json, os
+          with open('existing.json') as source:
+              result = json.load(source)
+          if result.get('images'):
+              entry = result['images'][0]
+              if json.loads(entry['imageManifest'])['config']['digest'] != os.environ['local_id']:
+                  raise SystemExit('Commit already exists with another build. Publish a new reviewed commit instead.')
+              print(entry['imageId']['imageDigest'])
+          elif any(f.get('failureCode') != 'ImageNotFound' for f in result.get('failures', [])):
+              raise SystemExit('Unexpected registry lookup failure')
+          PY
+          )
+          if [ -n "$existing" ]; then
+            digest="$existing"
+          else
+            docker tag "$IMAGE_TAG" "$tag"
+            docker push "$tag"
+            digest=$(aws ecr describe-images --repository-name "$name" --image-ids "imageTag=$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)
+          fi
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'image=%s\ndigest=%s\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
+          printf 'IMAGE_REFERENCE=%s@%s\n' "$image" "$digest" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          predicate = {'repository': os.environ['GITHUB_REPOSITORY'], 'commit': os.environ['GITHUB_SHA'],
+                       'component': os.environ['COMPONENT'], 'runId': int(os.environ['GITHUB_RUN_ID']),
+                       'workflow': '.github/workflows/ci.yml', 'ref': 'refs/heads/main'}
+          Path('release/provenance.json').write_text(json.dumps(predicate, sort_keys=True) + '\n')
+          PY
+      - name: Install pinned keyless signing client
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
+      - name: Sign image, provenance and SBOM
+        run: |
+          cosign sign --yes "$IMAGE_REFERENCE"
+          cosign attest --yes --type https://narx.space/attestations/release/v1 --predicate release/provenance.json "$IMAGE_REFERENCE"
+          cosign attest --yes --type cyclonedx --predicate release/sbom.cdx.json "$IMAGE_REFERENCE"
+          printf '### %s release\n\n`%s`\n\nSource: `%s`\n' "$COMPONENT" "$IMAGE_REFERENCE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
