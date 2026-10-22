@@ -1,0 +1,47 @@
+name: Application build and tests
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: Service name used for the validation image and build cache
+        required: true
+        type: string
+      context:
+        description: Build context relative to the caller repository
+        default: .
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      IMAGE_TAG: narx-check-${{ inputs.component }}:${{ github.sha }}
+    steps:
+      - name: Check out application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up BuildKit
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build tested runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.context }}
+          target: runtime
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=${{ inputs.component }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.component }}
+      - name: Verify runtime image defaults to a non-root user
+        run: |
+          user=$(docker image inspect "$IMAGE_TAG" --format '{{.Config.User}}')
+          case "$user" in
+            ''|root|root:*|0|0:*) echo 'Runtime image must specify a non-root user.' >&2; exit 1 ;;
+          esac
