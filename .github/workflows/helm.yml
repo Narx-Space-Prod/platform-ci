@@ -36,7 +36,7 @@ jobs:
           SCHEMA_REVISION: b2ba4defe30ed5a0104987433896f1fd32807304
         run: |
           mkdir -p "$RUNNER_TEMP/schemas"
-          for schema in deployment-apps-v1 service-v1 serviceaccount-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1 configmap-v1 statefulset-apps-v1 persistentvolumeclaim-v1 networkpolicy-networking-v1 job-batch-v1; do
+          for schema in deployment-apps-v1 service-v1 serviceaccount-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1 configmap-v1 statefulset-apps-v1 persistentvolumeclaim-v1 networkpolicy-networking-v1 job-batch-v1 role-rbac-v1 rolebinding-rbac-v1; do
             curl --fail --silent --show-error --location --retry 2 --max-time 30 \
               "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$SCHEMA_REVISION/v1.35.0-standalone-strict/$schema.json" \
               --output "$RUNNER_TEMP/schemas/$schema.json"
@@ -53,6 +53,7 @@ jobs:
             helm template catalogue charts/commerce-service -n "commerce-$environment" -f "$values" \
               --set image.repository=registry.invalid/validation-only/catalogue --set "image.digest=$digest" > "$rendered"
             "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
+              -schema-location "$GITHUB_WORKSPACE/schemas/argo/{{.ResourceKind}}.json" \
               -schema-location "$RUNNER_TEMP/schemas/{{.ResourceKind}}{{.KindSuffix}}.json" "$rendered"
           done
       - name: Reject missing immutable image identity
@@ -60,6 +61,11 @@ jobs:
           if helm template catalogue charts/commerce-service >/dev/null 2>&1; then
             echo 'Chart incorrectly accepted a release without an image repository and digest.' >&2
             exit 1
+          fi
+      - name: Install the pinned parser for optional platform policy tests
+        run: |
+          if [ -f tests/test_platform.py ]; then
+            python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
           fi
       - name: Validate full commerce release chart when present
         run: |
@@ -75,6 +81,10 @@ jobs:
                 -f "environments/$environment/runtime.yaml" -f "$RUNNER_TEMP/release.json" \
                 --set publicOrigin=https://validation.invalid --set awsRegion=us-east-1 --set 'externalDataCIDRs[0]=10.0.0.0/16' > "$RUNNER_TEMP/commerce-$environment.yaml"
               "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.35.0 \
+                -schema-location "$GITHUB_WORKSPACE/schemas/argo/{{.ResourceKind}}.json" \
                 -schema-location "$RUNNER_TEMP/schemas/{{.ResourceKind}}{{.KindSuffix}}.json" "$RUNNER_TEMP/commerce-$environment.yaml"
             done
+            if [ -f tests/test_platform.py ]; then
+              NARX_RENDER_DIR="$RUNNER_TEMP" python3 -m unittest discover -s tests -p 'test_platform.py' -v
+            fi
           fi
