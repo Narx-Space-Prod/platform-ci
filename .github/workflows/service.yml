@@ -146,9 +146,9 @@ jobs:
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
-      - name: Report publication held until AWS activation
+      - name: Report publication held until delivery activation
         if: github.event_name == 'push' && vars.DELIVERY_ENABLED != 'true'
-        run: echo 'ECR publishing is disabled. Configure AWS OIDC/ECR and the release App before setting DELIVERY_ENABLED=true.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'GHCR publishing is disabled. Configure package access and the dedicated Narx release App before setting DELIVERY_ENABLED=true.' >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Publish signed image
@@ -160,22 +160,24 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     outputs:
       image: ${{ steps.identity.outputs.image }}
       digest: ${{ steps.identity.outputs.digest }}
     env:
       COMPONENT: ${{ inputs.component }}
       IMAGE_TAG: narx-check-${{ inputs.component }}:${{ github.sha }}
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
     steps:
-      - name: Validate AWS configuration
-        env:
-          RELEASE_ROLE: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+      - name: Validate publishing identity
         run: |
-          [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
-          [[ "$AWS_REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]
-          [[ "$RELEASE_ROLE" =~ ^arn:aws:iam::[0-9]{12}:role/ ]]
+          printf 'DOCKER_CONFIG=%s/narx-docker-publish\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          python3 - <<'PYTHON'
+          import os
+          expected={'frontend':'commerce-frontend','catalogue':'commerce-catalogue',
+                    'orders':'commerce-orders','cart':'commerce-orders'}
+          if os.environ['GITHUB_REPOSITORY'] != 'Narx-Space-Prod/' + expected.get(os.environ['COMPONENT'], ''):
+              raise SystemExit('Unexpected publishing component/repository')
+          PYTHON
       - name: Download tested runtime image
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -188,46 +190,44 @@ jobs:
           path: release
       - name: Load exact tested image
         run: docker load --input runtime/runtime.tar
-      - name: Assume short-lived AWS role through OIDC
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
-          role-session-name: release-${{ github.run_id }}
-          role-duration-seconds: 900
-      - name: Authenticate to private ECR
-        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - name: Authenticate to GHCR using this workflow's short-lived token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: Publish immutable commit image
         id: identity
         run: |
-          name="narx/commerce-$COMPONENT"
-          image="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$name"
+          set -euo pipefail
+          image="ghcr.io/narx-space-prod/commerce-$COMPONENT"
           tag="$image:$GITHUB_SHA"
-          aws ecr batch-get-image --repository-name "$name" --image-ids "imageTag=$GITHUB_SHA" > existing.json
           local_id=$(docker image inspect "$IMAGE_TAG" --format '{{.Id}}')
           export local_id
-          existing=$(python3 - <<'PY'
+          if docker buildx imagetools inspect "$tag" --raw > existing.json 2> lookup-error.txt; then
+            python3 - <<'PYTHON'
           import json, os
           with open('existing.json') as source:
-              result = json.load(source)
-          if result.get('images'):
-              entry = result['images'][0]
-              if json.loads(entry['imageManifest'])['config']['digest'] != os.environ['local_id']:
-                  raise SystemExit('Commit already exists with another build. Publish a new reviewed commit instead.')
-              print(entry['imageId']['imageDigest'])
-          elif any(f.get('failureCode') != 'ImageNotFound' for f in result.get('failures', [])):
-              raise SystemExit('Unexpected registry lookup failure')
-          PY
-          )
-          if [ -n "$existing" ]; then
-            digest="$existing"
-          else
+              manifest=json.load(source)
+          if manifest.get('config',{}).get('digest') != os.environ['local_id']:
+              raise SystemExit('Commit already exists with another build. Publish a new reviewed commit instead.')
+          PYTHON
+          elif grep -Eiq 'manifest unknown|manifest .*not found|: not found' lookup-error.txt; then
             docker tag "$IMAGE_TAG" "$tag"
             docker push "$tag"
-            digest=$(aws ecr describe-images --repository-name "$name" --image-ids "imageTag=$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)
+          else
+            cat lookup-error.txt >&2
+            exit 1
           fi
+          digest=$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          # Bind to the final digest as well, so a concurrent tag change cannot get signed.
+          docker buildx imagetools inspect "$image@$digest" --raw > published.json
+          python3 - <<'PYTHON'
+          import json, os
+          with open('published.json') as source:
+              manifest=json.load(source)
+          if manifest.get('config',{}).get('digest') != os.environ['local_id']:
+              raise SystemExit('Published digest does not match the tested image')
+          PYTHON
           printf 'image=%s\ndigest=%s\n' "$image" "$digest" >> "$GITHUB_OUTPUT"
           printf 'IMAGE_REFERENCE=%s@%s\n' "$image" "$digest" >> "$GITHUB_ENV"
           python3 - <<'PY'
@@ -248,3 +248,6 @@ jobs:
           cosign attest --yes --type https://narx.space/attestations/release/v1 --predicate release/provenance.json "$IMAGE_REFERENCE"
           cosign attest --yes --type cyclonedx --predicate release/sbom.cdx.json "$IMAGE_REFERENCE"
           printf '### %s release\n\n%s\n\nSource: %s\n' "$COMPONENT" "$IMAGE_REFERENCE" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary registry login
+        if: always()
+        run: if [ -n "${DOCKER_CONFIG:-}" ]; then rm -rf "$DOCKER_CONFIG"; fi
