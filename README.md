@@ -47,3 +47,12 @@ Public-package visibility is an explicit owner setting, not changed by this work
 
 Merge the shared workflow PR first. Update service callers and the GitOps builder
 allowlist to the final reviewed main SHA before enabling DELIVERY_ENABLED.
+
+## Release credential boundary
+
+Image publication uses only the ephemeral GitHub token and main-only job guard. It
+does not need a deployment environment or release App key. The GitOps notification
+job uses the main-only gitops-release environment. Store NARX_RELEASE_APP_PRIVATE_KEY
+there, not as a repository secret, so branch PR workflows cannot read it. Callers pass
+that same secret name; the reusable job receives the protected environment's value.
+Keep source CODEOWNER checks, packages permissions and signed-main builder verification.
