@@ -16,7 +16,7 @@ SAMPLES={
  'frontend':('lcov.info','SF:src/server.js\nLF:2\nLH:1\nend_of_record\n'),
  'catalogue':('coverage.out','mode: atomic\nboutique/catalogue/main.go:1.1,2.1 2 1\n'),
  'orders':('jacoco.xml','<report><counter type="LINE" missed="1" covered="2"/></report>'),
- 'cart':('coverage.xml','<coverage lines-covered="1" lines-valid="2"><sources><source>.</source></sources></coverage>'),
+ 'cart':('coverage.xml','<coverage lines-covered="1" lines-valid="2"><sources><source></source><source>.</source></sources></coverage>'),
 }
 
 class CoverageContract(unittest.TestCase):
@@ -39,12 +39,24 @@ class CoverageContract(unittest.TestCase):
     config=(root/'narx-sonar.properties').read_text()
     self.assertIn('sonar.qualitygate.wait=true',config)
     self.assertIn('analysis/analysis-',config)
-    if 'cart' in components:self.assertIn('<source>cart</source>',(root/'analysis/analysis-cart/coverage.xml').read_text())
+    if 'cart' in components:
+     import xml.etree.ElementTree as ET
+     report=ET.parse(root/'analysis/analysis-cart/coverage.xml')
+     self.assertEqual([s.text for s in report.findall('./sources/source')],['cart'])
     identity=root/'analysis'/('analysis-'+components[0])/'source.json'
     data=json.loads(identity.read_text());data['commit']='b'*40;identity.write_text(json.dumps(data))
     result=self.execute(CONFIGURE,root,components[0],repo)
     self.assertNotEqual(result.returncode,0)
     self.assertIn('do not match',result.stderr)
+
+ def test_artifact_download_paths_are_explicit_for_single_and_multi_component_projects(self):
+  downloads=[step for step in SONAR['jobs']['analyze']['steps'] if 'actions/download-artifact@' in step.get('uses','')]
+  self.assertEqual(len(downloads),2)
+  for step in downloads:
+   self.assertNotIn('pattern',step['with'])
+   self.assertEqual(step['with']['path'],'analysis/'+step['with']['name'])
+  cart=next(step for step in downloads if step['with']['name']=='analysis-cart')
+  self.assertEqual(cart['if'],"github.repository == 'Narx-Space-Prod/commerce-orders'")
 
  def test_empty_missing_and_invalid_reports_fail_closed(self):
   with tempfile.TemporaryDirectory() as folder:
