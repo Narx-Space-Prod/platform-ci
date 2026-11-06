@@ -28,18 +28,25 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      PRIMARY_COMPONENT: ${{ github.repository == 'Narx-Space-Prod/commerce-frontend' && 'frontend' || github.repository == 'Narx-Space-Prod/commerce-catalogue' && 'catalogue' || 'orders' }}
     steps:
       - name: Check out source with SCM history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Download analysis inputs from this workflow run
+      - name: Download primary component analysis inputs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: analysis-*
-          path: analysis
-          merge-multiple: false
+          name: analysis-${{ env.PRIMARY_COMPONENT }}
+          path: analysis/analysis-${{ env.PRIMARY_COMPONENT }}
+      - name: Download Cart analysis inputs for the combined Orders project
+        if: github.repository == 'Narx-Space-Prod/commerce-orders'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: analysis-cart
+          path: analysis/analysis-cart
       - name: Validate project identity and configure analysis
         env:
           PROJECT_KEY: ${{ inputs.project-key }}

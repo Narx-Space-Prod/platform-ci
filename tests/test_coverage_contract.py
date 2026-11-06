@@ -46,6 +46,15 @@ class CoverageContract(unittest.TestCase):
     self.assertNotEqual(result.returncode,0)
     self.assertIn('do not match',result.stderr)
 
+ def test_artifact_download_paths_are_explicit_for_single_and_multi_component_projects(self):
+  downloads=[step for step in SONAR['jobs']['analyze']['steps'] if 'actions/download-artifact@' in step.get('uses','')]
+  self.assertEqual(len(downloads),2)
+  for step in downloads:
+   self.assertNotIn('pattern',step['with'])
+   self.assertEqual(step['with']['path'],'analysis/'+step['with']['name'])
+  cart=next(step for step in downloads if step['with']['name']=='analysis-cart')
+  self.assertEqual(cart['if'],"github.repository == 'Narx-Space-Prod/commerce-orders'")
+
  def test_empty_missing_and_invalid_reports_fail_closed(self):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);path=root/'analysis/frontend';path.mkdir(parents=True)
