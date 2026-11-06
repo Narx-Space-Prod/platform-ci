@@ -16,7 +16,7 @@ SAMPLES={
  'frontend':('lcov.info','SF:src/server.js\nLF:2\nLH:1\nend_of_record\n'),
  'catalogue':('coverage.out','mode: atomic\nboutique/catalogue/main.go:1.1,2.1 2 1\n'),
  'orders':('jacoco.xml','<report><counter type="LINE" missed="1" covered="2"/></report>'),
- 'cart':('coverage.xml','<coverage lines-covered="1" lines-valid="2"><sources><source>.</source></sources></coverage>'),
+ 'cart':('coverage.xml','<coverage lines-covered="1" lines-valid="2"><sources><source></source><source>.</source></sources></coverage>'),
 }
 
 class CoverageContract(unittest.TestCase):
@@ -39,7 +39,10 @@ class CoverageContract(unittest.TestCase):
     config=(root/'narx-sonar.properties').read_text()
     self.assertIn('sonar.qualitygate.wait=true',config)
     self.assertIn('analysis/analysis-',config)
-    if 'cart' in components:self.assertIn('<source>cart</source>',(root/'analysis/analysis-cart/coverage.xml').read_text())
+    if 'cart' in components:
+     import xml.etree.ElementTree as ET
+     report=ET.parse(root/'analysis/analysis-cart/coverage.xml')
+     self.assertEqual([s.text for s in report.findall('./sources/source')],['cart'])
     identity=root/'analysis'/('analysis-'+components[0])/'source.json'
     data=json.loads(identity.read_text());data['commit']='b'*40;identity.write_text(json.dumps(data))
     result=self.execute(CONFIGURE,root,components[0],repo)

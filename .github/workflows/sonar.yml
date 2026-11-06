@@ -111,8 +111,11 @@ jobs:
               import xml.etree.ElementTree as ET
               report=Path('analysis/analysis-cart/coverage.xml')
               tree=ET.parse(report)
-              for source in tree.findall('./sources/source'):
-                  source.text='cart'
+              sources=tree.getroot().find('sources')
+              if sources is None:
+                  sources=ET.SubElement(tree.getroot(),'sources')
+              sources.clear()
+              ET.SubElement(sources,'source').text='cart'
               tree.write(report, encoding='utf-8', xml_declaration=True)
               settings['sonar.coverage.jacoco.xmlReportPaths']='analysis/analysis-orders/jacoco.xml'
               settings['sonar.python.coverage.reportPaths']='analysis/analysis-cart/coverage.xml'
