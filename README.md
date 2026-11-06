@@ -56,3 +56,58 @@ job uses the main-only gitops-release environment. Store NARX_RELEASE_APP_PRIVAT
 there, not as a repository secret, so branch PR workflows cannot read it. Callers pass
 that same secret name; the reusable job receives the protected environment's value.
 Keep source CODEOWNER checks, packages permissions and signed-main builder verification.
+
+## SonarQube Cloud source quality gate
+
+`sonar.yml` is a separate reusable source-analysis gate for the three application
+repositories. Orders includes both its Java services and the Python cart. It uses
+full SCM history, a commit-pinned official scanner with signature verification,
+explicit source/test scopes, and waits up to ten minutes for the server-side quality
+gate. Scan errors, missing configuration, timeouts and failed gates fail the job.
+Java bytecode and library inputs are compiled in the pinned Maven builder without
+rerunning tests; the existing image build remains responsible for application tests.
+No scanner token is passed to Maven, Docker builds, publishing or GitOps.
+
+Activation requires an actual provisioned Sonar organisation and three GitHub-bound
+projects. Connect only the three service repositories through the Sonar GitHub App.
+Check the plan supports pre-merge PR analysis: the free OSS plan is distinct from
+the standard Free plan, and eligibility must be confirmed in Sonar. Do not depend
+on an expiring commercial trial. Select CI-based analysis (disable automatic
+analysis) so each commit has one analysis authority. Establish the main baseline
+before requiring PR checks.
+
+Configure repository variables `SONAR_ORGANIZATION`, `SONAR_PROJECT_KEY` and,
+optionally, `SONAR_SERVER_URL` (EU `https://sonarcloud.io`, US
+`https://sonarqube.us`). Store `SONAR_TOKEN` directly in each service repository's
+Actions Secrets; prefer project-scoped analysis credentials where supported. Never
+paste tokens into issues, chat, properties files, or command arguments. The scanner
+receives only the dedicated analysis credential, never release credentials.
+
+Call the reviewed workflow SHA from each service CI, after workflow/secret checks:
+
+```yaml
+  sonar:
+    needs: workflows
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/sonar.yml@REVIEWED_COMMIT_SHA
+    with:
+      organization: ${{ vars.SONAR_ORGANIZATION }}
+      project-key: ${{ vars.SONAR_PROJECT_KEY }}
+      server-url: ${{ vars.SONAR_SERVER_URL || 'https://sonarcloud.io' }}
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+```
+
+Add `sonar` to application build jobs' `needs` so a failed quality gate prevents
+publication and release intake. Preserve existing service workflow pins and signed
+builder allowlists when only adding this independent job. After a real baseline
+and successful PR analysis, add the observed check context to required checks;
+never require a check which cannot yet run. Do not use `pull_request_target` to
+execute candidate source or provide secrets to forks. Fork PRs need an explicit
+maintainer-controlled process; missing credentials must not produce a green scan.
+
+This first integration supplies source findings, duplication and maintainability
+metrics. **It does not yet import test coverage.** Existing test success is not
+coverage evidence: configure LCOV, Go coverage, Python coverage XML and JaCoCo XML
+before claiming or enforcing a coverage threshold. Do not fabricate coverage or
+exclude application code merely to pass the gate. Review initial findings and
+Sonar's new-code definition, then fix findings through normal reviewed PRs.

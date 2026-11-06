@@ -1,0 +1,105 @@
+name: SonarQube Cloud
+
+on:
+  workflow_call:
+    inputs:
+      project-key:
+        description: Exact key of the provisioned, GitHub-bound Sonar project
+        required: true
+        type: string
+      organization:
+        required: true
+        type: string
+      server-url:
+        description: SonarQube Cloud region endpoint
+        default: https://sonarcloud.io
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Source quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source with SCM history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate project identity and configure analysis
+        env:
+          PROJECT_KEY: ${{ inputs.project-key }}
+          SONAR_ORGANIZATION: ${{ inputs.organization }}
+          SONAR_SERVER: ${{ inputs.server-url }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          repositories = {
+              'Narx-Space-Prod/commerce-frontend': ('src,public', 'tests', '**/*.test.js'),
+              'Narx-Space-Prod/commerce-catalogue': ('.', '.', '**/*_test.go'),
+              'Narx-Space-Prod/commerce-orders': ('src/main,cart', 'src/test,cart/tests', '**/tests/**,**/src/test/**'),
+          }
+          if os.environ['GITHUB_REPOSITORY'] not in repositories:
+              raise SystemExit('Unsupported application repository')
+          for key in ('PROJECT_KEY', 'SONAR_ORGANIZATION'):
+              if not re.fullmatch(r'[A-Za-z0-9_.:-]+', os.environ[key]):
+                  raise SystemExit('Missing or invalid Sonar identity: ' + key)
+          if os.environ['SONAR_SERVER'] not in {'https://sonarcloud.io', 'https://sonarqube.us'}:
+              raise SystemExit('Unsupported SonarQube Cloud region')
+          sources, tests, inclusions = repositories[os.environ['GITHUB_REPOSITORY']]
+          settings = {
+              'sonar.projectKey': os.environ['PROJECT_KEY'],
+              'sonar.organization': os.environ['SONAR_ORGANIZATION'],
+              'sonar.host.url': os.environ['SONAR_SERVER'],
+              'sonar.sources': sources,
+              'sonar.tests': tests,
+              'sonar.test.inclusions': inclusions,
+              'sonar.exclusions': '**/tests/**,**/src/test/**,**/*_test.go,**/node_modules/**,**/target/**,**/.git/**',
+              'sonar.sourceEncoding': 'UTF-8',
+              'sonar.qualitygate.wait': 'true',
+              'sonar.qualitygate.timeout': '600',
+              'sonar.scm.provider': 'git',
+          }
+          if os.environ['GITHUB_REPOSITORY'].endswith('/commerce-orders'):
+              settings.update({'sonar.java.binaries': 'target/classes',
+                               'sonar.java.test.binaries': 'target/test-classes',
+                               'sonar.java.libraries': 'target/sonar-libraries/*.jar',
+                               'sonar.java.source': '21', 'sonar.python.version': '3.12'})
+          # An explicit generated settings file prevents a repository-level properties
+          # file from silently replacing the centrally reviewed identity and scopes.
+          Path(os.environ['RUNNER_TEMP'], 'narx-sonar.properties').write_text(
+              ''.join(f'{key}={value}\n' for key, value in settings.items()))
+          PY
+      - name: Compile Java analysis inputs without rerunning application tests
+        if: github.repository == 'Narx-Space-Prod/commerce-orders'
+        run: |
+          docker run --rm \
+            --volume "$PWD:/src" --workdir /src \
+            --env MAVEN_OPTS='-Xmx768m' \
+            maven:3.9.9-eclipse-temurin-21@sha256:3a4ab3276a087bf276f79cae96b1af04f53731bec53fb2e651aca79e4b10211e \
+            mvn --batch-mode --no-transfer-progress -DskipTests test-compile \
+            org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies \
+            -DincludeScope=test -DoutputDirectory=target/sonar-libraries
+      - name: Check analysis credential
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo 'SONAR_TOKEN is missing. Configure the repository analysis token before enabling this workflow.' >&2
+            exit 1
+          fi
+      - name: Analyze source and wait for the quality gate
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: -Dproject.settings=${{ runner.temp }}/narx-sonar.properties
