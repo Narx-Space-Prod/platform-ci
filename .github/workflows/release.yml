@@ -23,6 +23,7 @@ jobs:
     environment: gitops-release
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Record signed image identities for reconciliation
         env:
@@ -58,3 +59,25 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches -f event_type=release-published
+      - name: Summarize CI stage timings
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" > jobs.json
+          python3 - <<'PY'
+          import datetime, json, os
+          def stamp(value):
+              return datetime.datetime.fromisoformat(value.replace('Z','+00:00'))
+          jobs=json.load(open('jobs.json'))['jobs']
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as output:
+              output.write('### CI stage timings\n\n| Job | Execution | Queue | Result |\n| --- | ---: | ---: | --- |\n')
+              for job in jobs:
+                  if not job.get('started_at'):
+                      continue
+                  started=stamp(job['started_at'])
+                  queue=max(0,int((started-stamp(job['created_at'])).total_seconds()))
+                  duration=str(int((stamp(job['completed_at'])-started).total_seconds()))+'s' if job.get('completed_at') else 'running'
+                  output.write(f"| {job['name']} | {duration} | {queue}s | {job.get('conclusion') or job['status']} |\n")
+          PY

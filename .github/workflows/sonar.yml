@@ -34,6 +34,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Download analysis inputs from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: analysis-*
+          path: analysis
+          merge-multiple: false
       - name: Validate project identity and configure analysis
         env:
           PROJECT_KEY: ${{ inputs.project-key }}
@@ -63,32 +69,51 @@ jobs:
               'sonar.sources': sources,
               'sonar.tests': tests,
               'sonar.test.inclusions': inclusions,
-              'sonar.exclusions': '**/tests/**,**/src/test/**,**/*_test.go,**/node_modules/**,**/target/**,**/.git/**',
+              'sonar.exclusions': 'analysis/**,**/tests/**,**/src/test/**,**/*_test.go,**/node_modules/**,**/target/**,**/.git/**',
               'sonar.sourceEncoding': 'UTF-8',
               'sonar.qualitygate.wait': 'true',
               'sonar.qualitygate.timeout': '600',
               'sonar.scm.provider': 'git',
           }
           if os.environ['GITHUB_REPOSITORY'].endswith('/commerce-orders'):
-              settings.update({'sonar.java.binaries': 'target/classes',
-                               'sonar.java.test.binaries': 'target/test-classes',
-                               'sonar.java.libraries': 'target/sonar-libraries/*.jar',
+              settings.update({'sonar.java.binaries': 'analysis/analysis-orders/classes',
+                               'sonar.java.test.binaries': 'analysis/analysis-orders/test-classes',
+                               'sonar.java.libraries': 'analysis/analysis-orders/libraries/*.jar',
                                'sonar.java.source': '21', 'sonar.python.version': '3.12'})
+          components = {'Narx-Space-Prod/commerce-frontend': ['frontend'],
+                        'Narx-Space-Prod/commerce-catalogue': ['catalogue'],
+                        'Narx-Space-Prod/commerce-orders': ['orders', 'cart']}[os.environ['GITHUB_REPOSITORY']]
+          import json
+          for component in components:
+              root=Path('analysis')/('analysis-'+component)
+              identity=json.loads((root/'source.json').read_text())
+              if identity != {'repository':os.environ['GITHUB_REPOSITORY'],
+                              'commit':os.environ['GITHUB_SHA'],'component':component}:
+                  raise SystemExit('Analysis inputs do not match this repository/revision')
+              report={'frontend':'lcov.info','catalogue':'coverage.out',
+                      'orders':'jacoco.xml','cart':'coverage.xml'}[component]
+              if not (root/report).is_file() or (root/report).stat().st_size == 0:
+                  raise SystemExit('Coverage input is missing: '+component)
+          if 'frontend' in components:
+              settings['sonar.javascript.lcov.reportPaths']='analysis/analysis-frontend/lcov.info'
+          if 'catalogue' in components:
+              settings['sonar.go.coverage.reportPaths']='analysis/analysis-catalogue/coverage.out'
+          if 'orders' in components:
+              # Cart tests run with /src as their project root in Docker. Resolve
+              # XML sources against Cart's location in the combined Orders repo.
+              import xml.etree.ElementTree as ET
+              report=Path('analysis/analysis-cart/coverage.xml')
+              tree=ET.parse(report)
+              for source in tree.findall('./sources/source'):
+                  source.text='cart'
+              tree.write(report, encoding='utf-8', xml_declaration=True)
+              settings['sonar.coverage.jacoco.xmlReportPaths']='analysis/analysis-orders/jacoco.xml'
+              settings['sonar.python.coverage.reportPaths']='analysis/analysis-cart/coverage.xml'
           # An explicit generated settings file prevents a repository-level properties
           # file from silently replacing the centrally reviewed identity and scopes.
           Path(os.environ['RUNNER_TEMP'], 'narx-sonar.properties').write_text(
               ''.join(f'{key}={value}\n' for key, value in settings.items()))
           PY
-      - name: Compile Java analysis inputs without rerunning application tests
-        if: github.repository == 'Narx-Space-Prod/commerce-orders'
-        run: |
-          docker run --rm \
-            --volume "$PWD:/src" --workdir /src \
-            --env MAVEN_OPTS='-Xmx768m' \
-            maven:3.9.9-eclipse-temurin-21@sha256:3a4ab3276a087bf276f79cae96b1af04f53731bec53fb2e651aca79e4b10211e \
-            mvn --batch-mode --no-transfer-progress -DskipTests test-compile \
-            org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy-dependencies \
-            -DincludeScope=test -DoutputDirectory=target/sonar-libraries
       - name: Check analysis credential
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

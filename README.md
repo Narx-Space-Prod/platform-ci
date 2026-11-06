@@ -1,113 +1,103 @@
 # platform-ci
 
-Owner: Platform engineering.
+Owner: Platform engineering. Application repositories pin reviewed reusable GitHub
+Actions workflows by commit SHA. Main requires CODEOWNER review, passing checks and
+resolved conversations, including for administrators. No workflow approves code PRs
+or bypasses protection. Project guide: [DOC.md](https://github.com/Narx-Space-Prod/platform-infrastructure/blob/main/DOC.md).
 
-Shared validation, then application build/scan/publish and release orchestration. Callers pin approved workflow revisions by commit SHA and receive only the permissions they need.
+## Application delivery
 
-Project guide: [DOC.md](https://github.com/Narx-Space-Prod/platform-infrastructure/blob/main/DOC.md).
-
-## Current state
-
-Application builds test and scan the runtime once, then transfer the exact image to
-an isolated trusted publisher. The publisher uses a short-lived GitHub token to push
-to GHCR and OIDC for keyless Cosign signatures/provenance/SBOMs. Publishing remains
-disabled until callers grant packages:write and dedicated release credentials/package
-access are configured. PR build jobs have contents:read only and never publish.
-All changes after repository initialization go through feature branches and pull requests.
-These repositories are public on GitHub Free. Protected `main` requires a CODEOWNER
-approval, passing CI checks and resolved conversations; administrators follow the same rules.
-
-## Reusable workflows
-
-| Workflow | Checks |
-| --- | --- |
-| `workflows.yml` | GitHub Actions and embedded shell syntax using actionlint |
-| `terraform.yml` | Formatting, locked provider initialization, validation and mocked Terraform tests |
-| `helm.yml` | Lint, render dev/QA/production profiles, Kubernetes schema validation and missing-image rejection |
-| `service.yml` | Build runtime images through test stages, reuse BuildKit caches and check non-root defaults |
-
-There are no AWS dependencies or cluster apply operations in these workflows. Only the
-main-only publisher receives packages:write and signing OIDC; release notification uses
-a separately supplied GitHub App key. No workflow approves PRs or bypasses protection.
-Downloads are versioned and checksum-verified; actions are pinned by commit SHA.
-The Helm validator targets the current commerce chart layout rather than claiming to be a universal framework.
-Each application's runtime Docker target depends on its tests. Building the runtime
-therefore verifies source and packages it in one build; CI does not rebuild a separate
-test image or rerun a duplicate test wrapper. Orders and cart use separate jobs/images.
-
-## GHCR publication contract
-
-Images use `ghcr.io/narx-space-prod/commerce-COMPONENT:COMMIT`, with deployments pinned
-to the verified digest. GHCR tags are mutable at the registry: this workflow refuses a
-commit tag pointing to another tested image and checks the final digest before signing.
-A matching existing image is reused. Authentication/network errors fail closed.
-Private packages require explicit read access for platform-gitops Actions and a separate
-read:packages pull credential for the local cluster; never reuse the publishing token.
-Public-package visibility is an explicit owner setting, not changed by this workflow.
-
-Merge the shared workflow PR first. Update service callers and the GitOps builder
-allowlist to the final reviewed main SHA before enabling DELIVERY_ENABLED.
-
-## Release credential boundary
-
-Image publication uses only the ephemeral GitHub token and main-only job guard. It
-does not need a deployment environment or release App key. The GitOps notification
-job uses the main-only gitops-release environment. Store NARX_RELEASE_APP_PRIVATE_KEY
-there, not as a repository secret, so branch PR workflows cannot read it. Callers pass
-that same secret name; the reusable job receives the protected environment's value.
-Keep source CODEOWNER checks, packages permissions and signed-main builder verification.
-
-## SonarQube Cloud source quality gate
-
-`sonar.yml` is a separate reusable source-analysis gate for the three application
-repositories. Orders includes both its Java services and the Python cart. It uses
-full SCM history, a commit-pinned official scanner with signature verification,
-explicit source/test scopes, and waits up to ten minutes for the server-side quality
-gate. Scan errors, missing configuration, timeouts and failed gates fail the job.
-Java bytecode and library inputs are compiled in the pinned Maven builder without
-rerunning tests; the existing image build remains responsible for application tests.
-No scanner token is passed to Maven, Docker builds, publishing or GitOps.
-
-Activation requires an actual provisioned Sonar organisation and three GitHub-bound
-projects. Connect only the three service repositories through the Sonar GitHub App.
-Check the plan supports pre-merge PR analysis: the free OSS plan is distinct from
-the standard Free plan, and eligibility must be confirmed in Sonar. Do not depend
-on an expiring commercial trial. Select CI-based analysis (disable automatic
-analysis) so each commit has one analysis authority. Establish the main baseline
-before requiring PR checks.
-
-Configure repository variables `SONAR_ORGANIZATION`, `SONAR_PROJECT_KEY` and,
-optionally, `SONAR_SERVER_URL` (EU `https://sonarcloud.io`, US
-`https://sonarqube.us`). Store `SONAR_TOKEN` directly in each service repository's
-Actions Secrets; prefer project-scoped analysis credentials where supported. Never
-paste tokens into issues, chat, properties files, or command arguments. The scanner
-receives only the dedicated analysis credential, never release credentials.
-
-Call the reviewed workflow SHA from each service CI, after workflow/secret checks:
-
-```yaml
-  sonar:
-    needs: workflows
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/sonar.yml@REVIEWED_COMMIT_SHA
-    with:
-      organization: ${{ vars.SONAR_ORGANIZATION }}
-      project-key: ${{ vars.SONAR_PROJECT_KEY }}
-      server-url: ${{ vars.SONAR_SERVER_URL || 'https://sonarcloud.io' }}
-    secrets:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+```text
+workflow syntax + Gitleaks history scan
+  → cached image/test builds (Orders and Cart run concurrently)
+  → SonarQube Cloud imports coverage + Java classes from those test stages
+  → quality gate passes
+  → isolated main-only publishers load the exact tested images, push and sign
+  → release notification requests GitOps reconciliation
 ```
 
-Add `sonar` to application build jobs' `needs` so a failed quality gate prevents
-publication and release intake. Preserve existing service workflow pins and signed
-builder allowlists when only adding this independent job. After a real baseline
-and successful PR analysis, add the observed check context to required checks;
-never require a check which cannot yet run. Do not use `pull_request_target` to
-execute candidate source or provide secrets to forks. Fork PRs need an explicit
-maintainer-controlled process; missing credentials must not produce a green scan.
+| Workflow | Responsibility |
+| --- | --- |
+| `workflows.yml` | actionlint and full fetched-history Gitleaks scan |
+| `build.yml` | Meaningful-change detection, Docker tests, coverage export, non-root check, Trivy HIGH/CRITICAL gate and SBOM |
+| `sonar.yml` | Source analysis, coverage import and server-side quality gate |
+| `service.yml` | Main-only immutable image publication and keyless signing; called only after build + Sonar succeed |
+| `release.yml` | Record signed image identities, notify GitOps, summarize CI execution/queue times |
+| `helm.yml` | Helm rendering, schema validation and image validation |
+| `terraform.yml` | Formatting, locked providers, validation, tests and IaC scanning |
 
-This first integration supplies source findings, duplication and maintainability
-metrics. **It does not yet import test coverage.** Existing test success is not
-coverage evidence: configure LCOV, Go coverage, Python coverage XML and JaCoCo XML
-before claiming or enforcing a coverage threshold. Do not fabricate coverage or
-exclude application code merely to pass the gate. Review initial findings and
-Sonar's new-code definition, then fix findings through normal reviewed PRs.
+Separating build and publication allows the caller to enforce one repository-wide
+Sonar gate before either Orders or Cart can publish. Builds have contents:read only.
+Only the isolated main publisher receives packages:write and signing id-token:write;
+it never checks out or executes application code. Sonar receives only its analysis
+token, and the protected main-only gitops-release environment owns the separate
+release App key. Public fork PRs receive no analysis token; missing credentials fail
+rather than pretending that a scan ran. Do not execute candidate source using
+pull_request_target or move this work onto the shared deployment laptop.
+
+## Coverage without duplicate test runs
+
+Each application Dockerfile offers an `analysis` scratch target exporting reports
+from the same test stage required by `runtime`. BuildKit reuses that stage; there is
+no second test wrapper, separate Java compilation, or second runtime build. The
+runtime remains the default final stage and contains no coverage tools/reports.
+
+| Component | Test output | Sonar parameter |
+| --- | --- | --- |
+| Frontend | c8 LCOV, including currently uncovered browser application code | sonar.javascript.lcov.reportPaths |
+| Catalogue | Go atomic coverage profile | sonar.go.coverage.reportPaths |
+| Orders | JaCoCo XML, compiled classes and dependency JARs | sonar.coverage.jacoco.xmlReportPaths |
+| Cart | coverage.py Cobertura XML | sonar.python.coverage.reportPaths |
+
+The current-run `analysis-COMPONENT` artifacts expire after one day. Each includes
+repository/commit/component identity and is checked before analysis; missing,
+empty, invalid or mismatched reports fail. Build summaries report measured lines
+(or Go statements), with the full report in the artifact. Coverage is not a claim
+of complete test quality; uncovered source remains visible. No new blanket
+coverage threshold or exclusions are introduced merely to make old code pass.
+Sonar's configured new-code quality gate remains authoritative.
+
+The meaningful-change flag still prevents unnecessary runtime publication. Report
+exports run even for unchanged components so Orders' combined Java/Python project
+receives a complete coverage picture; unchanged test layers can come from BuildKit
+cache. Sonar consumes both components after their builds. When only one component
+changes, the other publisher is skipped, and release notification still accepts
+the successfully published component. Failed build/analysis/publication cannot
+be treated as a successful partial release.
+
+## SonarQube Cloud configuration
+
+Three GitHub-bound projects use organisation `narx-space-prod` and repository
+variables SONAR_ORGANIZATION, SONAR_PROJECT_KEY, SONAR_SERVER_URL. The restricted
+organisation secret SONAR_TOKEN is selected for exactly those three repositories.
+Automatic analysis must be disabled in each project because GitHub Actions is the
+single analysis authority. The shared workflow supports the EU sonarcloud.io and
+US sonarqube.us endpoints; never substitute arbitrary hosts. The official scanner
+is SHA-pinned with its default signature verification enabled.
+
+All three repositories require `sonar / Source quality gate` from GitHub Actions,
+alongside their existing build/workflow checks and CODEOWNER approval. PR analysis
+and merged-main analysis were verified live for the existing organisation. Check
+plan entitlements before migrating to another organisation or subscription.
+
+## GHCR publication and adoption
+
+Images use `ghcr.io/narx-space-prod/commerce-COMPONENT:COMMIT`; deployments use the
+verified digest. The publisher refuses a commit tag containing a different tested
+image and rechecks the final digest before signing. Authentication/network errors
+fail closed. Cosign signs the image, provenance and CycloneDX SBOM using OIDC. GHCR
+uses the short-lived workflow token; private cluster pulls use a separate read-only
+credential. Never reuse publishing or release credentials for pull access.
+
+Merge changes to this repository first, then update caller workflow pins and the
+GitOps reviewed-builder allowlist to the final merged SHA through reviewed PRs.
+The publisher path remains service.yml to retain the existing certificate identity
+contract. Existing consumers pinned to earlier revisions keep their old behaviour
+until deliberately migrated. Preserve existing trusted builder SHAs so already
+published images and rollbacks remain verifiable.
+
+CI execution and queue durations are reported by the release-notification job.
+Its timing summary is non-blocking telemetry; all test/security/release gates are
+blocking. Deployment and approval time are separate and must be measured from
+Argo operations and GitOps PR timestamps. These workflows do not provision AWS
+resources or directly apply Kubernetes workloads.
