@@ -1,29 +1,22 @@
-name: GitOps release notification
+name: Signed release records
 
 on:
   workflow_call:
     inputs:
-      dispatch-delivery:
-        default: true
-        type: boolean
       releases:
         description: JSON array of published image identities
         required: true
         type: string
-    secrets:
-      NARX_RELEASE_APP_PRIVATE_KEY:
-        required: true
 
 permissions:
   contents: read
 
 jobs:
   notify:
-    name: Request GitOps release PR
+    name: Record release metadata
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment: gitops-release
     permissions:
       contents: write
       actions: read
@@ -48,31 +41,6 @@ jobs:
                   subprocess.run(['gh','release','create',tag,'--repo',os.environ['GITHUB_REPOSITORY'],
                       '--target',release['commit'],'--title',tag,'--notes','Tested image; verify signed provenance before promotion.',str(path)],check=True)
           PY
-      - name: Mint token scoped to GitOps
-        if: inputs.dispatch-delivery
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          app-id: ${{ vars.NARX_RELEASE_APP_ID }}
-          private-key: ${{ secrets.NARX_RELEASE_APP_PRIVATE_KEY }}
-          owner: Narx-Space-Prod
-          repositories: platform-gitops
-          permission-contents: write
-          permission-pull-requests: write
-      - name: Request reconciliation of completed releases
-        if: inputs.dispatch-delivery
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          Path('dispatch.json').write_text(json.dumps({'event_type':'release-published','client_payload':{
-              'repository':os.environ['GITHUB_REPOSITORY'],'commit':os.environ['GITHUB_SHA'],
-              'runId':int(os.environ['GITHUB_RUN_ID'])}}))
-          PY
-          gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches --input dispatch.json
-          printf '### Next: Commerce delivery\n\n[Open the central delivery pipeline](https://github.com/Narx-Space-Prod/platform-gitops/actions/workflows/delivery.yml). It verifies this completed CI run, then shows Dev and QA rollout gates and the Production approval PR.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Summarize CI stage timings
         if: always()
         continue-on-error: true

@@ -36,7 +36,7 @@ class ApplicationWrapper(unittest.TestCase):
   self.assertIn('!cancelled()',guard)
   self.assertNotIn('inherit',str(jobs))
   self.assertEqual(set(jobs['quality']['secrets']),{'SONAR_TOKEN'})
-  self.assertEqual(set(jobs['delivery']['secrets']),{'NARX_RELEASE_APP_PRIVATE_KEY'})
+  self.assertNotIn('secrets',jobs['delivery'])
 
 class MasterIntakeContract(unittest.TestCase):
  def test_main_starts_master_before_build_finishes_and_does_not_dispatch_twice(self):
@@ -46,7 +46,7 @@ class MasterIntakeContract(unittest.TestCase):
   self.assertIn("github.event_name == 'push'",intake['if'])
   self.assertIn("github.ref == 'refs/heads/main'",intake['if'])
   self.assertEqual(set(intake['secrets']),{'NARX_RELEASE_APP_PRIVATE_KEY'})
-  self.assertFalse(jobs['delivery']['with']['dispatch-delivery'])
+  self.assertNotIn('dispatch-delivery',jobs['delivery']['with'])
   self.assertEqual(jobs['build']['needs'],'validate')
 
 class VersionedEvidenceContract(unittest.TestCase):
@@ -76,3 +76,17 @@ class VersionedEvidenceContract(unittest.TestCase):
      with patch.dict(os.environ,{field:value}):
       with self.assertRaises(AssertionError):exec(compile(script,'emitter','exec'),{})
    finally:os.chdir(old)
+
+
+class ReleaseRecordBoundary(unittest.TestCase):
+ def test_release_recorder_neither_dispatches_nor_receives_app_credentials(self):
+  workflow=yaml.safe_load((ROOT/'.github/workflows/release.yml').read_text())
+  trigger=workflow.get('on',workflow.get(True))['workflow_call']
+  self.assertNotIn('secrets',trigger)
+  self.assertEqual(set(trigger['inputs']),{'releases'})
+  job=workflow['jobs']['notify']
+  self.assertNotIn('environment',job)
+  self.assertNotIn('secrets',job)
+  self.assertNotIn('dispatches',str(job))
+  self.assertNotIn('create-github-app-token',str(job))
+  self.assertIn("github.ref == 'refs/heads/main'",job['if'])
