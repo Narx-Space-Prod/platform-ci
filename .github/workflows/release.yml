@@ -3,6 +3,9 @@ name: GitOps release notification
 on:
   workflow_call:
     inputs:
+      dispatch-delivery:
+        default: true
+        type: boolean
       releases:
         description: JSON array of published image identities
         required: true
@@ -46,6 +49,7 @@ jobs:
                       '--target',release['commit'],'--title',tag,'--notes','Tested image; verify signed provenance before promotion.',str(path)],check=True)
           PY
       - name: Mint token scoped to GitOps
+        if: inputs.dispatch-delivery
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -56,6 +60,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
       - name: Request reconciliation of completed releases
+        if: inputs.dispatch-delivery
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
