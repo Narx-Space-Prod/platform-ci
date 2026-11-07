@@ -147,6 +147,20 @@ jobs:
           case "$user" in
             ''|root|root:*|0|0:*) echo 'Runtime image must specify a non-root user.' >&2; exit 1 ;;
           esac
+      - name: Component integration tests of the tested runtime
+        if: steps.changes.outputs.changed == 'true'
+        uses: Narx-Space-Prod/platform-ci/integration@bee471591c8b97eb389f91f5abfc95e09ee85a1d
+        with:
+          component: ${{ inputs.component }}
+          image: ${{ env.IMAGE_TAG }}
+      - name: Retain integration test results
+        if: always() && steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-${{ inputs.component }}
+          path: ${{ runner.temp }}/integration-${{ inputs.component }}.xml
+          retention-days: 14
+          if-no-files-found: warn
       - name: Install verified vulnerability scanner
         if: steps.changes.outputs.changed == 'true'
         env:

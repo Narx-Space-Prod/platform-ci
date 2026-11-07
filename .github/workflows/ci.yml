@@ -25,3 +25,65 @@ jobs:
           persist-credentials: false
       - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
       - run: python3 -m unittest discover -s tests -v
+
+  integration:
+    name: Runtime integration contract (${{ matrix.component }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: frontend
+            repository: commerce-frontend
+            revision: 63dabdb45c3f970f193e46b04394c158a4c19fd3
+            context: fixture-source
+          - component: catalogue
+            repository: commerce-catalogue
+            revision: 37feb8a947de59894d1ed3a1c7f6a6929e3406f3
+            context: fixture-source
+          - component: orders
+            repository: commerce-orders
+            revision: 8600afd9d6b1ac1fc8c7e38211e6239a9a9b0998
+            context: fixture-source
+          - component: cart
+            repository: commerce-orders
+            revision: 8600afd9d6b1ac1fc8c7e38211e6239a9a9b0998
+            context: fixture-source/cart
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out the frozen runtime contract fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Narx-Space-Prod/${{ matrix.repository }}
+          ref: ${{ matrix.revision }}
+          path: fixture-source
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Build the runtime fixture including its existing unit tests
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: ${{ matrix.context }}
+          target: runtime
+          load: true
+          push: false
+          tags: narx-check-${{ matrix.component }}:${{ github.sha }}
+          cache-from: type=gha,scope=integration-fixture-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=integration-fixture-${{ matrix.component }}
+      - name: Test the integration harness against the actual runtime
+        uses: ./integration
+        with:
+          component: ${{ matrix.component }}
+          image: narx-check-${{ matrix.component }}:${{ github.sha }}
+      - name: Retain the JUnit contract test report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: integration-contract-${{ matrix.component }}
+          path: ${{ runner.temp }}/integration-${{ matrix.component }}.xml
+          retention-days: 14
+          if-no-files-found: warn
