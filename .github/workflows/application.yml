@@ -23,14 +23,14 @@ jobs:
   build:
     name: 02 - Build test and scan
     needs: validate
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/build.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    uses: ./.github/workflows/build.yml
     with:
       component: ${{ inputs.application }}
   cart:
     name: 02 - Cart build test and scan
     if: inputs.application == 'orders'
     needs: validate
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/build.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    uses: ./.github/workflows/build.yml
     with:
       component: cart
       context: cart

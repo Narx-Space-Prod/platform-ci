@@ -106,7 +106,7 @@ resources or directly apply Kubernetes workloads.
 
 `application.yml` is the application pipeline wrapper. A service caller supplies
 only `application` (`frontend`, `catalogue`, or `orders`) and the two explicitly
-named secrets. The wrapper owns the numbered stage graph:
+named secrets. The wrapper binds build.yml to its own reviewed commit and owns the numbered stage graph:
 
 ```text
 01 Source policy → 02 Build/test/scan → 03 Sonar quality gate
