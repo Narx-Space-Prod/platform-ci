@@ -20,6 +20,9 @@ class ApplicationWrapper(unittest.TestCase):
    self.assertEqual(jobs[name]['needs'],[build,'quality'])
    self.assertIn("github.ref == 'refs/heads/main'",jobs[name]['if'])
    self.assertIn("github.event_name == 'push'",jobs[name]['if'])
+   self.assertIn('!cancelled()',jobs[name]['if'])
+   self.assertIn(f"needs.{build}.result == 'success'",jobs[name]['if'])
+   self.assertIn("needs.quality.result == 'success'",jobs[name]['if'])
    self.assertNotIn('secrets',jobs[name])
    self.assertTrue(jobs[name]['uses'].endswith('service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3'))
 
