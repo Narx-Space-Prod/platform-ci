@@ -77,7 +77,7 @@ jobs:
       component: cart
       changed: ${{ needs.cart.outputs.changed == 'true' }}
   delivery:
-    name: 05 - Start commerce delivery
+    name: 05 - Record release facts
     needs: [publish, cart-publish]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.cart-publish.result == 'success' || needs.cart-publish.result == 'skipped') && (needs.publish.result == 'success' || needs.cart-publish.result == 'success') }}
     permissions:
@@ -85,14 +85,11 @@ jobs:
       actions: read
     uses: ./.github/workflows/release.yml
     with:
-      dispatch-delivery: false
       releases: |
         [
           {"component":"${{ inputs.application }}","image":"${{ needs.publish.outputs.image }}","digest":"${{ needs.publish.outputs.digest }}"},
           {"component":"cart","image":"${{ needs.cart-publish.outputs.image }}","digest":"${{ needs.cart-publish.outputs.digest }}"}
         ]
-    secrets:
-      NARX_RELEASE_APP_PRIVATE_KEY: ${{ secrets.NARX_RELEASE_APP_PRIVATE_KEY }}
 
   test-evidence:
     needs: [build, cart]
