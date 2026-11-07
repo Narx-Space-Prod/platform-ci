@@ -1,0 +1,27 @@
+name: Runtime component integration
+description: Test the already-built runtime with disposable dependencies on the hosted runner
+inputs:
+  component:
+    required: true
+    description: Validated application component
+  image:
+    required: true
+    description: Current tested runtime image in the local Docker daemon
+runs:
+  using: composite
+  steps:
+    - name: Component integration tests
+      shell: bash
+      env:
+        COMPONENT: ${{ inputs.component }}
+        TESTED_IMAGE: ${{ inputs.image }}
+      run: python3 "$GITHUB_ACTION_PATH/runner.py" --component "$COMPONENT" --image "$TESTED_IMAGE" --report "$RUNNER_TEMP/integration-$COMPONENT.xml"
+    - name: Clean integration resources even after failed or cancelled tests
+      if: always()
+      shell: bash
+      env:
+        COMPONENT: ${{ inputs.component }}
+      run: |
+        owner="$GITHUB_RUN_ID-$GITHUB_JOB-$COMPONENT"
+        docker ps --all --quiet --filter "label=narx.integration.owner=$owner" | xargs --no-run-if-empty docker rm --force --volumes
+        docker network ls --quiet --filter "label=narx.integration.owner=$owner" | xargs --no-run-if-empty docker network rm

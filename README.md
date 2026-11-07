@@ -80,6 +80,36 @@ alongside their existing build/workflow checks and CODEOWNER approval. PR analys
 and merged-main analysis were verified live for the existing organisation. Check
 plan entitlements before migrating to another organisation or subscription.
 
+## Unit and component integration gates
+
+Existing language-native unit tests run in Docker's test stages: Node's test
+runner, Go test, JUnit 5 and pytest. Their coverage reports feed Sonar. The build
+workflow also tests the **same loaded runtime image** before scanning/publication;
+it does not rebuild an integration image or access the local Kubernetes cluster.
+
+The `integration` composite action starts uniquely labelled, disposable Docker
+resources on the GitHub-hosted runner. Orders uses real PostgreSQL and Flyway;
+Cart uses real Redis. Frontend/Catalogue use an explicit HTTP contract fixture
+rather than production dependencies. Tests cover successful HTTP contracts,
+invalid input/authorization, database-backed session revocation, cart isolation,
+and dependency failure/recovery. No AWS or payment-provider credentials are
+accepted. All HTTP targets are runner-local dynamically allocated ports.
+
+Failures block the build and therefore Sonar/publication/delivery. JUnit XML is
+retained as `integration-COMPONENT` for fourteen days. Test resources, including
+anonymous database volumes, are cleaned by generated resource name and job-scoped
+labels, with an always-run cleanup step. Never use a global Docker prune command.
+Unchanged runtimes still skip publication and runtime integration; report export
+can reuse their test cache for the complete repository coverage picture.
+
+Library CI validates this harness against four frozen application source commits
+on separate hosted workers. Those are tool-contract fixtures, not replacements
+for testing each application's current commit in its own build. These are
+**component integration tests**, not the full payment/queue/storefront end-to-end
+suite. Existing isolated Compose business-journey tests remain a separate opt-in
+suite. Coverage currently represents the instrumented language tests; black-box
+runtime integration coverage is not added to those percentages.
+
 ## GHCR publication and adoption
 
 Images use `ghcr.io/narx-space-prod/commerce-COMPONENT:COMMIT`; deployments use the
