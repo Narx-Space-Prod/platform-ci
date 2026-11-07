@@ -157,3 +157,9 @@ still run in the source repository; multi-repository ownership does not require
 rebuilding every service in one central checkout. Migrate required-check contexts
 to the observed wrapper check names only after the new checks have passed; retain
 strictness, CODEOWNER review and administrator enforcement.
+
+### End-to-end operator view
+
+The application wrapper starts **Commerce CI/CD** in `Narx-Space-Prod/platform-gitops` immediately after main-branch source-policy validation, in parallel with builds. The master verifies the real service CI jobs and then coordinates Dev, QA and Production in one graph. It does not rebuild, rerun tests or relax signing, review or deployment-evidence requirements. Source PR checks stay in the service repo.
+
+The final release-record step still writes immutable release facts, but disables its legacy delivery dispatch for new callers to avoid starting two controllers. The master waits for the entire source CI run to finish successfully before using those facts, so no in-progress CI is accepted for promotion. Existing callers retain the old dispatch default during migration.

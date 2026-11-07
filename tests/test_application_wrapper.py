@@ -37,3 +37,14 @@ class ApplicationWrapper(unittest.TestCase):
   self.assertNotIn('inherit',str(jobs))
   self.assertEqual(set(jobs['quality']['secrets']),{'SONAR_TOKEN'})
   self.assertEqual(set(jobs['delivery']['secrets']),{'NARX_RELEASE_APP_PRIVATE_KEY'})
+
+class MasterIntakeContract(unittest.TestCase):
+ def test_main_starts_master_before_build_finishes_and_does_not_dispatch_twice(self):
+  jobs=WORKFLOW['jobs']
+  intake=jobs['intake']
+  self.assertEqual(intake['needs'],'validate')
+  self.assertIn("github.event_name == 'push'",intake['if'])
+  self.assertIn("github.ref == 'refs/heads/main'",intake['if'])
+  self.assertEqual(set(intake['secrets']),{'NARX_RELEASE_APP_PRIVATE_KEY'})
+  self.assertFalse(jobs['delivery']['with']['dispatch-delivery'])
+  self.assertEqual(jobs['build']['needs'],'validate')

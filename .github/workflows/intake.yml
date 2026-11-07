@@ -1,0 +1,36 @@
+name: Start Commerce CI/CD master
+on:
+  workflow_call:
+    secrets:
+      NARX_RELEASE_APP_PRIVATE_KEY:
+        required: true
+permissions:
+  contents: read
+jobs:
+  start:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: gitops-release
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        id: app
+        with:
+          app-id: ${{ vars.NARX_RELEASE_APP_ID }}
+          private-key: ${{ secrets.NARX_RELEASE_APP_PRIVATE_KEY }}
+          owner: Narx-Space-Prod
+          repositories: platform-gitops
+          permission-contents: write
+      - name: Start the single release graph before CI finishes
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          Path('dispatch.json').write_text(json.dumps({'event_type':'ci-started','client_payload':{
+              'repository':os.environ['GITHUB_REPOSITORY'],'commit':os.environ['GITHUB_SHA'],
+              'runId':int(os.environ['GITHUB_RUN_ID'])}}))
+          PYTHON
+          gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches --input dispatch.json
+          printf '### Commerce CI/CD master\n\n[Follow the complete CI-to-Production graph](https://github.com/Narx-Space-Prod/platform-gitops/actions/workflows/commerce.yml). Match this repository and commit in the run title.\n' >> "$GITHUB_STEP_SUMMARY"
