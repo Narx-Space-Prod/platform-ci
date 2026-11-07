@@ -48,7 +48,7 @@ jobs:
   publish:
     name: 04 - Sign and publish
     needs: [build, quality]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.build.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.quality.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.build.outputs.changed == 'true' }}
     permissions:
       contents: read
       id-token: write
@@ -60,7 +60,7 @@ jobs:
   cart-publish:
     name: 04 - Cart sign and publish
     needs: [cart, quality]
-    if: inputs.application == 'orders' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.cart.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.cart.result == 'success' && needs.quality.result == 'success' && inputs.application == 'orders' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.cart.outputs.changed == 'true' }}
     permissions:
       contents: read
       id-token: write
