@@ -1,4 +1,4 @@
-name: Application image publication
+name: Reusable - Application image publication
 
 on:
   workflow_call:

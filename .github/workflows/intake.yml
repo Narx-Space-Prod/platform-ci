@@ -1,4 +1,4 @@
-name: Start Commerce CI/CD master
+name: Reusable - Start Commerce CI/CD master
 on:
   workflow_call:
     secrets:
