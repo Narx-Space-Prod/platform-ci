@@ -1,0 +1,87 @@
+name: Application pipeline
+
+on:
+  workflow_call:
+    inputs:
+      application:
+        description: frontend, catalogue or orders (Orders includes its Cart companion)
+        required: true
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      NARX_RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: 01 - Source policy
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@666b596743c0fd43a0ba3ed1efb8dc7b89b7593e
+  build:
+    name: 02 - Build test and scan
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      component: ${{ inputs.application }}
+  cart:
+    name: 02 - Cart build test and scan
+    if: inputs.application == 'orders'
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      component: cart
+      context: cart
+  quality:
+    name: 03 - Sonar quality gate
+    needs: [build, cart]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.cart.result == 'success' || needs.cart.result == 'skipped') }}
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/sonar.yml@5c5e186e8b028a62ed002af36595281429505659
+    with:
+      organization: ${{ vars.SONAR_ORGANIZATION }}
+      project-key: ${{ vars.SONAR_PROJECT_KEY }}
+      server-url: ${{ vars.SONAR_SERVER_URL || 'https://sonarcloud.io' }}
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  publish:
+    name: 04 - Sign and publish
+    needs: [build, quality]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.build.outputs.changed == 'true'
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    with:
+      component: ${{ inputs.application }}
+      changed: ${{ needs.build.outputs.changed == 'true' }}
+  cart-publish:
+    name: 04 - Cart sign and publish
+    needs: [cart, quality]
+    if: inputs.application == 'orders' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && needs.cart.outputs.changed == 'true'
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    with:
+      component: cart
+      changed: ${{ needs.cart.outputs.changed == 'true' }}
+  delivery:
+    name: 05 - Start commerce delivery
+    needs: [publish, cart-publish]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DELIVERY_ENABLED == 'true' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.cart-publish.result == 'success' || needs.cart-publish.result == 'skipped') && (needs.publish.result == 'success' || needs.cart-publish.result == 'success') }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      releases: |
+        [
+          {"component":"${{ inputs.application }}","image":"${{ needs.publish.outputs.image }}","digest":"${{ needs.publish.outputs.digest }}"},
+          {"component":"cart","image":"${{ needs.cart-publish.outputs.image }}","digest":"${{ needs.cart-publish.outputs.digest }}"}
+        ]
+    secrets:
+      NARX_RELEASE_APP_PRIVATE_KEY: ${{ secrets.NARX_RELEASE_APP_PRIVATE_KEY }}

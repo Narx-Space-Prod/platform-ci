@@ -58,7 +58,16 @@ jobs:
       - name: Request reconciliation of completed releases
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches -f event_type=release-published
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('dispatch.json').write_text(json.dumps({'event_type':'release-published','client_payload':{
+              'repository':os.environ['GITHUB_REPOSITORY'],'commit':os.environ['GITHUB_SHA'],
+              'runId':int(os.environ['GITHUB_RUN_ID'])}}))
+          PY
+          gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches --input dispatch.json
+          printf '### Next: Commerce delivery\n\n[Open the central delivery pipeline](https://github.com/Narx-Space-Prod/platform-gitops/actions/workflows/delivery.yml). It verifies this completed CI run, then shows Dev and QA rollout gates and the Production approval PR.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Summarize CI stage timings
         if: always()
         continue-on-error: true

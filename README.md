@@ -131,3 +131,29 @@ Its timing summary is non-blocking telemetry; all test/security/release gates ar
 blocking. Deployment and approval time are separate and must be measured from
 Argo operations and GitOps PR timestamps. These workflows do not provision AWS
 resources or directly apply Kubernetes workloads.
+
+## Single application entry workflow
+
+`application.yml` is the application pipeline wrapper. A service caller supplies
+only `application` (`frontend`, `catalogue`, or `orders`) and the two explicitly
+named secrets. The wrapper binds build.yml to its own reviewed commit and owns the numbered stage graph:
+
+```text
+01 Source policy → 02 Build/test/scan → 03 Sonar quality gate
+                → 04 Sign/publish → 05 Start commerce delivery
+```
+
+Orders' Cart companion runs alongside its primary build and publisher. Its skipped
+jobs do not block Frontend/Catalogue, and an unchanged companion does not suppress
+a successful sibling release. Builds and quality analysis cannot access the release
+App key; publishers keep the existing reviewed service.yml certificate identity.
+The caller must grant the maximum permissions needed by nested jobs, while each
+called job retains its own narrower permissions. Never use secrets:inherit.
+
+Release notifications include repository, commit and CI run ID so delivery can
+wait for successful CI completion rather than race the final notification step.
+The CI summary links to the central Commerce Delivery workflow. Source PR checks
+still run in the source repository; multi-repository ownership does not require
+rebuilding every service in one central checkout. Migrate required-check contexts
+to the observed wrapper check names only after the new checks have passed; retain
+strictness, CODEOWNER review and administrator enforcement.
