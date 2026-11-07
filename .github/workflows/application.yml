@@ -93,3 +93,35 @@ jobs:
         ]
     secrets:
       NARX_RELEASE_APP_PRIVATE_KEY: ${{ secrets.NARX_RELEASE_APP_PRIVATE_KEY }}
+
+  test-evidence:
+    needs: [build, cart]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.cart.result == 'success' || needs.cart.result == 'skipped') }}
+    uses: ./.github/workflows/evidence.yml
+    with:
+      gate: tests
+      application: ${{ inputs.application }}
+      primary: ${{ needs.build.result }}
+      companion: ${{ needs.cart.result }}
+  quality-evidence:
+    needs: quality
+    if: ${{ !cancelled() && needs.quality.result == 'success' }}
+    uses: ./.github/workflows/evidence.yml
+    with:
+      gate: quality
+      application: ${{ inputs.application }}
+      primary: ${{ needs.quality.result }}
+  publication-evidence:
+    needs: [quality, publish, cart-publish, delivery]
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.quality.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.cart-publish.result == 'success' || needs.cart-publish.result == 'skipped') && (needs.delivery.result == 'success' || needs.delivery.result == 'skipped') }}
+    uses: ./.github/workflows/evidence.yml
+    with:
+      gate: publication
+      application: ${{ inputs.application }}
+      primary: ${{ needs.publish.result }}
+      companion: ${{ needs.cart-publish.result }}
+      releases: |
+        [
+          {"component":"${{ inputs.application }}","image":"${{ needs.publish.outputs.image }}","digest":"${{ needs.publish.outputs.digest }}"},
+          {"component":"cart","image":"${{ needs.cart-publish.outputs.image }}","digest":"${{ needs.cart-publish.outputs.digest }}"}
+        ]

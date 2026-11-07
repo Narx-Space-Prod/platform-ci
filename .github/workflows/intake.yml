@@ -30,7 +30,7 @@ jobs:
           from pathlib import Path
           Path('dispatch.json').write_text(json.dumps({'event_type':'ci-started','client_payload':{
               'repository':os.environ['GITHUB_REPOSITORY'],'commit':os.environ['GITHUB_SHA'],
-              'runId':int(os.environ['GITHUB_RUN_ID'])}}))
+              'runId':int(os.environ['GITHUB_RUN_ID']),'evidenceVersion':1}}))
           PYTHON
           gh api --method POST repos/Narx-Space-Prod/platform-gitops/dispatches --input dispatch.json
           printf '### Commerce CI/CD master\n\n[Follow the complete CI-to-Production graph](https://github.com/Narx-Space-Prod/platform-gitops/actions/workflows/commerce.yml). Match this repository and commit in the run title.\n' >> "$GITHUB_STEP_SUMMARY"
