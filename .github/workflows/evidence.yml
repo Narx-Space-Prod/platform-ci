@@ -1,0 +1,69 @@
+name: Versioned CI evidence
+on:
+  workflow_call:
+    inputs:
+      gate:
+        type: string
+        required: true
+      application:
+        type: string
+        required: true
+      primary:
+        type: string
+        required: true
+      companion:
+        type: string
+        default: skipped
+      releases:
+        type: string
+        default: '[]'
+permissions:
+  contents: read
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate and record the machine-readable gate
+        env:
+          GATE: ${{ inputs.gate }}
+          APPLICATION: ${{ inputs.application }}
+          PRIMARY: ${{ inputs.primary }}
+          COMPANION: ${{ inputs.companion }}
+          RELEASES: ${{ inputs.releases }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          e=os.environ; gate=e['GATE']; app=e['APPLICATION']
+          assert gate in ('tests','quality','publication')
+          assert app in ('frontend','catalogue','orders')
+          assert e['GITHUB_REPOSITORY']=='Narx-Space-Prod/commerce-'+app
+          primary,companion=e['PRIMARY'],e['COMPANION']
+          if gate=='publication':
+              assert primary in ('success','skipped') and companion in ('success','skipped')
+          else:
+              assert primary=='success'
+              assert companion==('success' if gate=='tests' and app=='orders' else 'skipped')
+          releases=[r for r in json.loads(e['RELEASES']) if r.get('digest')]
+          allowed={app,'cart'} if app=='orders' else {app}
+          assert len({r['component'] for r in releases})==len(releases)
+          for r in releases:
+              assert r['component'] in allowed
+              assert r['image']=='ghcr.io/narx-space-prod/commerce-'+r['component']
+              assert re.fullmatch('sha256:[a-f0-9]{64}',r['digest'])
+          if gate=='publication':
+              assert bool(releases)==('success' in (primary,companion))
+          else:
+              assert not releases
+          value={'schemaVersion':1,'gate':gate,'repository':e['GITHUB_REPOSITORY'],
+                 'commit':e['GITHUB_SHA'],'runId':int(e['GITHUB_RUN_ID']),
+                 'runAttempt':int(e['GITHUB_RUN_ATTEMPT']),'result':'success','releases':releases}
+          Path('gate.json').write_text(json.dumps(value)+'\n')
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: narx-ci-v1-${{ inputs.gate }}-${{ github.run_attempt }}
+          path: gate.json
+          if-no-files-found: error
+          retention-days: 30

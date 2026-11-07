@@ -48,3 +48,31 @@ class MasterIntakeContract(unittest.TestCase):
   self.assertEqual(set(intake['secrets']),{'NARX_RELEASE_APP_PRIVATE_KEY'})
   self.assertFalse(jobs['delivery']['with']['dispatch-delivery'])
   self.assertEqual(jobs['build']['needs'],'validate')
+
+class VersionedEvidenceContract(unittest.TestCase):
+ def test_evidence_is_separate_from_privileged_steps_and_publication_waits_for_records(self):
+  jobs=WORKFLOW['jobs']
+  self.assertEqual(jobs['test-evidence']['needs'],['build','cart'])
+  self.assertEqual(jobs['quality-evidence']['needs'],'quality')
+  self.assertEqual(jobs['publication-evidence']['needs'],['quality','publish','cart-publish','delivery'])
+  for name in ('test-evidence','quality-evidence','publication-evidence'):
+   self.assertNotIn('secrets',jobs[name])
+   self.assertNotIn('permissions',jobs[name])
+   self.assertTrue(jobs[name]['uses'].endswith('/evidence.yml'))
+   self.assertIn('!cancelled()',jobs[name]['if'])
+ def test_emitter_rejects_failed_gates_and_binds_run_attempt(self):
+  import os,tempfile
+  from unittest.mock import patch
+  workflow=yaml.safe_load((ROOT/'.github/workflows/evidence.yml').read_text())
+  script=workflow['jobs']['record']['steps'][0]['run'].split("python3 - <<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+  env={'GATE':'tests','APPLICATION':'orders','PRIMARY':'success','COMPANION':'success','RELEASES':'[]','GITHUB_REPOSITORY':'Narx-Space-Prod/commerce-orders','GITHUB_SHA':'b'*40,'GITHUB_RUN_ID':'12','GITHUB_RUN_ATTEMPT':'2'}
+  import json
+  with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,env):
+   old=os.getcwd()
+   try:
+    os.chdir(folder);exec(compile(script,'emitter','exec'),{})
+    self.assertEqual(json.loads(Path('gate.json').read_text())['runAttempt'],2)
+    for field,value in [('PRIMARY','failure'),('COMPANION','skipped')]:
+     with patch.dict(os.environ,{field:value}):
+      with self.assertRaises(AssertionError):exec(compile(script,'emitter','exec'),{})
+   finally:os.chdir(old)
