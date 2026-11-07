@@ -28,13 +28,14 @@ class Lab:
   if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('Run live integration tests on an isolated GitHub-hosted runner')
   self.component,self.image=component,image
   self.name='narx-integration-'+uuid.uuid4().hex[:12];self.containers=[];self.network=False
+  self.owner='-'.join([os.environ.get('GITHUB_RUN_ID','local'),os.environ.get('GITHUB_JOB','test'),component])
  def docker(self,*args):
   result=subprocess.run(['docker',*args],text=True,capture_output=True,timeout=180)
   if result.returncode:raise RuntimeError('Docker operation failed: '+args[0]+'\n'+result.stderr[-2000:])
   return result.stdout.strip()
  def start(self,alias,image,env=None,port=None,memory='128m',extra=(),command=()):
   args=['run','--detach','--name',self.name+'-'+alias,'--label','narx.integration='+self.name,
-        '--network',self.name,'--network-alias',alias,'--memory',memory,'--cpus','1']
+        '--label','narx.integration.owner='+self.owner,'--network',self.name,'--network-alias',alias,'--memory',memory,'--cpus','1']
   for key,value in (env or {}).items():args+=['--env',key+'='+value]
   if port:args+=['--publish','127.0.0.1::'+str(port)]
   self.containers.append(self.name+'-'+alias)
@@ -42,7 +43,7 @@ class Lab:
   return cid
  def __enter__(self):
   try:
-   self.docker('network','create','--label','narx.integration='+self.name,self.name);self.network=True
+   self.docker('network','create','--label','narx.integration='+self.name,'--label','narx.integration.owner='+self.owner,self.name);self.network=True
    env={}
    if self.component=='cart':
     self.dependency=self.start('redis',REDIS,memory='64m',command=('redis-server','--save','','--appendonly','no'))
