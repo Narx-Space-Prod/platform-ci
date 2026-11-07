@@ -1,4 +1,4 @@
-name: Signed release records
+name: Reusable - Signed release records
 
 on:
   workflow_call:

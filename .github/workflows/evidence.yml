@@ -1,4 +1,4 @@
-name: Versioned CI evidence
+name: Reusable - Versioned CI evidence
 on:
   workflow_call:
     inputs:

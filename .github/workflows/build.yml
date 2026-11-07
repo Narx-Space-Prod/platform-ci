@@ -1,4 +1,4 @@
-name: Application build and coverage
+name: Reusable - Application build and coverage
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: Helm validation
+name: Reusable - Helm validation
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: Application pipeline
+name: Reusable - Application pipeline
 
 on:
   workflow_call:
