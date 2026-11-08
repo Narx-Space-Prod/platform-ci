@@ -7,6 +7,20 @@ ROOT=Path(__file__).resolve().parents[1]
 WORKFLOW=yaml.safe_load((ROOT/'.github/workflows/application.yml').read_text())
 
 class ApplicationWrapper(unittest.TestCase):
+ def test_entry_workflow_uses_one_coherent_library_revision(self):
+  # Local nested workflows inherit the entry workflow's pinned commit.
+  # A second remote self-pin would silently mix library versions again.
+  for name, job in WORKFLOW['jobs'].items():
+   target = job.get('uses')
+   if target:
+    with self.subTest(job=name):
+     self.assertTrue(target.startswith('./.github/workflows/'), target)
+     self.assertNotIn('@', target)
+     self.assertTrue((ROOT / target).is_file(), target)
+     nested = yaml.safe_load((ROOT / target).read_text())
+     events = nested.get('on', nested.get(True))
+     self.assertIn('workflow_call', events)
+
  def test_builds_are_read_only_and_publication_waits_for_quality(self):
   jobs=WORKFLOW['jobs']
   self.assertEqual(WORKFLOW['permissions'],{'contents':'read'})
@@ -24,7 +38,7 @@ class ApplicationWrapper(unittest.TestCase):
    self.assertIn(f"needs.{build}.result == 'success'",jobs[name]['if'])
    self.assertIn("needs.quality.result == 'success'",jobs[name]['if'])
    self.assertNotIn('secrets',jobs[name])
-   self.assertTrue(jobs[name]['uses'].endswith('service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3'))
+   self.assertEqual(jobs[name]['uses'],'./.github/workflows/service.yml')
 
  def test_optional_cart_does_not_block_a_successful_primary_release(self):
   jobs=WORKFLOW['jobs']

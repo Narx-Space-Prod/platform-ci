@@ -16,10 +16,12 @@ on:
 permissions:
   contents: read
 
+# The caller pins this entry workflow once. All nested workflows resolve from
+# that same commit; do not introduce separate platform-ci workflow revisions.
 jobs:
   validate:
     name: 01 - Source policy
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@666b596743c0fd43a0ba3ed1efb8dc7b89b7593e
+    uses: ./.github/workflows/workflows.yml
   intake:
     name: 00 - Start end-to-end release graph
     needs: validate
@@ -45,7 +47,7 @@ jobs:
     name: 03 - Sonar quality gate
     needs: [build, cart]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.cart.result == 'success' || needs.cart.result == 'skipped') }}
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/sonar.yml@5c5e186e8b028a62ed002af36595281429505659
+    uses: ./.github/workflows/sonar.yml
     with:
       organization: ${{ vars.SONAR_ORGANIZATION }}
       project-key: ${{ vars.SONAR_PROJECT_KEY }}
@@ -60,7 +62,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    uses: ./.github/workflows/service.yml
     with:
       component: ${{ inputs.application }}
       changed: ${{ needs.build.outputs.changed == 'true' }}
@@ -72,7 +74,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/service.yml@35ff4ae9d506db00dbc2adc7ec027382bbe99db3
+    uses: ./.github/workflows/service.yml
     with:
       component: cart
       changed: ${{ needs.cart.outputs.changed == 'true' }}
